@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Registrar colaborador</title>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f1f5f9; color: #0f172a; }
+    header {
+      background: #0f172a; color: #fff; padding: 16px 24px; display: flex;
+      justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+    }
+    header a { color: #93c5fd; text-decoration: none; font-size: 14px; }
+    .contenido { max-width: 980px; margin: 24px auto; padding: 0 16px; display: grid; grid-template-columns: 380px 1fr; gap: 24px; }
+    @media (max-width: 800px) { .contenido { grid-template-columns: 1fr; } }
+    .tarjeta { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    h2 { margin-top: 0; font-size: 18px; }
+    label { display: block; margin: 12px 0 4px; font-size: 13px; font-weight: 600; color: #334155; }
+    input[type=text], input[type=password] {
+      width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 15px;
+    }
+    #video { width: 100%; border-radius: 10px; background: #000; transform: scaleX(-1); }
+    #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+    .videoWrap { position: relative; }
+    button {
+      cursor: pointer; border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 600;
+    }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-secondary { background: #e2e8f0; color: #0f172a; }
+    .btn-danger { background: #fee2e2; color: #b91c1c; }
+    .btn-ok { background: #dcfce7; color: #166534; }
+    .muestras { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+    .muestra { width: 46px; height: 46px; border-radius: 8px; background: #e2e8f0; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+    .muestra.ok { background: #bbf7d0; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #e2e8f0; }
+    .pill { padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+    .pill-ok { background: #dcfce7; color: #166534; }
+    .pill-off { background: #fee2e2; color: #b91c1c; }
+    #msg { margin-top: 10px; font-size: 14px; min-height: 20px; }
+    #msg.err { color: #b91c1c; }
+    #msg.ok { color: #166534; }
+    #pinWrap { margin-bottom: 14px; }
+    #pinWrap.oculto { display: none; }
+  </style>
+</head>
+<body>
+<header>
+  <div><strong>Registrar colaborador</strong></div>
+  <div>
+    <a href="#" id="linkKiosko" target="_blank">Ir al kiosko</a> ·
+    <a href="#" id="linkReportes" target="_blank">Ver reportes</a>
+  </div>
+</header>
+
+<div class="contenido">
+  <div class="tarjeta">
+    <div id="pinWrap">
+      <label>PIN de administrador</label>
+      <input type="password" id="pinAdmin" placeholder="Ingresa el PIN configurado en la hoja Configuracion">
+    </div>
+
+    <h2>1. Datos del colaborador</h2>
+    <label>Nombre completo</label>
+    <input type="text" id="nombre" placeholder="Ej. María Fernández">
+    <label>Código / cédula (opcional, sirve para actualizar el rostro)</label>
+    <input type="text" id="codigo" placeholder="Ej. 1-2345-6789">
+
+    <h2 style="margin-top:20px;">2. Capturar rostro</h2>
+    <p style="font-size:13px;color:#475569;">
+      Toma 3 muestras mirando de frente, con buena luz. Entre más variadas
+      (con y sin lentes, leve giro de cabeza), mejor reconocerá el kiosko.
+    </p>
+    <div class="videoWrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <button class="btn-primary" id="btnActivarCam" onclick="activarCamara()" style="display:none; margin-bottom:10px;">📷 Activar cámara</button>
+    <div class="muestras">
+      <div class="muestra" id="m0">1</div>
+      <div class="muestra" id="m1">2</div>
+      <div class="muestra" id="m2">3</div>
+    </div>
+    <button class="btn-secondary" onclick="capturarMuestra()">📸 Capturar muestra</button>
+    <button class="btn-primary" onclick="guardar()" id="btnGuardar" disabled>💾 Guardar colaborador</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Colaboradores registrados</h2>
+    <div id="listaWrap">Ingresa el PIN y presiona "Actualizar lista".</div>
+    <button class="btn-secondary" onclick="cargarLista()" style="margin-top:10px;">🔄 Actualizar lista</button>
+  </div>
+</div>
+
+<script>
+  // ------------------------------------------------------------------
+  // URL de tu implementación de Apps Script (termina en /exec).
+  // ------------------------------------------------------------------
+  var APP_URL = 'https://script.google.com/macros/s/AKfycbwDcOYKcgzqY5U1uQpDbWJ92oZMt9PdMZjzDxyNuaMVR1DiB62eOb8-t-bAbFkykTgamA/exec';
+
+  document.getElementById('linkKiosko').href = 'kiosko.html';
+  document.getElementById('linkReportes').href = APP_URL + '?page=reportes';
+
+  // ------------------------------------------------------------------
+  // Cliente JSONP para hablar con Apps Script sin problemas de CORS.
+  // ------------------------------------------------------------------
+  var _jsonpContador = 0;
+  function llamarApi(accion, params) {
+    return new Promise(function (resolve, reject) {
+      var cbName = '_cb' + (_jsonpContador++) + '_' + Date.now();
+      var script = document.createElement('script');
+
+      var timeoutId = setTimeout(function () {
+        limpiar();
+        reject(new Error('Tiempo de espera agotado contactando el servidor.'));
+      }, 15000);
+
+      function limpiar() {
+        clearTimeout(timeoutId);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+
+      window[cbName] = function (resp) {
+        limpiar();
+        if (resp && resp.ok) resolve(resp.data);
+        else reject(new Error((resp && resp.error) || 'Error desconocido'));
+      };
+
+      var qs = 'action=' + encodeURIComponent(accion) + '&callback=' + cbName;
+      Object.keys(params || {}).forEach(function (k) {
+        qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+      });
+
+      script.src = APP_URL + '?' + qs;
+      script.onerror = function () {
+        limpiar();
+        reject(new Error('No se pudo contactar el servidor.'));
+      };
+      document.body.appendChild(script);
+    });
+  }
+
+  function pinActual() {
+    return document.getElementById('pinAdmin').value.trim();
+  }
+
+  var MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+  var video = document.getElementById('video');
+  var overlay = document.getElementById('overlay');
+  var ctx = overlay.getContext('2d');
+  var muestras = []; // arreglos de 128 floats
+  var ultimaDeteccion = null;
+
+  function setMsg(texto, tipo) {
+    var el = document.getElementById('msg');
+    el.textContent = texto;
+    el.className = tipo || '';
+  }
+
+  async function iniciarCamara() {
+    var stream = await navigator.mediaDevices.getUserMedia({ video: { width: 400, height: 300 }, audio: false });
+    video.srcObject = stream;
+    await new Promise(function (resolve) { video.onloadedmetadata = resolve; });
+    overlay.width = video.clientWidth;
+    overlay.height = video.clientHeight;
+    detectarContinuo();
+  }
+
+  async function detectarContinuo() {
+    setInterval(async function () {
+      var det = await faceapi
+        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      ultimaDeteccion = det || null;
+      if (det) {
+        var displaySize = { width: overlay.clientWidth, height: overlay.clientHeight };
+        var resized = faceapi.resizeResults(det, displaySize);
+        ctx.strokeStyle = '#22c55e';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(resized.detection.box.x, resized.detection.box.y, resized.detection.box.width, resized.detection.box.height);
+      }
+    }, 400);
+  }
+
+  function capturarMuestra() {
+    if (!ultimaDeteccion) {
+      setMsg('No se detecta un rostro claro. Acércate a la cámara.', 'err');
+      return;
+    }
+    if (muestras.length >= 3) return;
+    muestras.push(Array.from(ultimaDeteccion.descriptor));
+    document.getElementById('m' + (muestras.length - 1)).classList.add('ok');
+    setMsg(muestras.length + ' de 3 muestras capturadas.', 'ok');
+    if (muestras.length === 3) {
+      document.getElementById('btnGuardar').disabled = false;
+    }
+  }
+
+  function promedioDescriptores(lista) {
+    var n = lista.length, len = lista[0].length, prom = new Array(len).fill(0);
+    lista.forEach(function (d) { for (var i = 0; i < len; i++) prom[i] += d[i] / n; });
+    // Se redondea a 4 decimales: alcanza de sobra para el reconocimiento
+    // y mantiene la URL de la llamada corta.
+    return prom.map(function (v) { return Math.round(v * 10000) / 10000; });
+  }
+
+  function guardar() {
+    var nombre = document.getElementById('nombre').value.trim();
+    var codigo = document.getElementById('codigo').value.trim();
+    var pin = pinActual();
+    if (!pin) { setMsg('Ingresa el PIN de administrador primero.', 'err'); return; }
+    if (!nombre) { setMsg('Escribe el nombre del colaborador.', 'err'); return; }
+    if (muestras.length < 3) { setMsg('Captura las 3 muestras primero.', 'err'); return; }
+
+    var descriptor = promedioDescriptores(muestras);
+    document.getElementById('btnGuardar').disabled = true;
+    setMsg('Guardando...', '');
+
+    llamarApi('guardarEmpleado', {
+      nombre: nombre,
+      codigo: codigo,
+      descriptor: JSON.stringify(descriptor),
+      pin: pin
+    })
+      .then(function () {
+        setMsg('Colaborador guardado correctamente ✅', 'ok');
+        document.getElementById('nombre').value = '';
+        document.getElementById('codigo').value = '';
+        muestras = [];
+        [0, 1, 2].forEach(function (i) { document.getElementById('m' + i).classList.remove('ok'); });
+        document.getElementById('btnGuardar').disabled = true;
+        cargarLista();
+      })
+      .catch(function (err) {
+        setMsg('Error: ' + err, 'err');
+        document.getElementById('btnGuardar').disabled = false;
+      });
+  }
+
+  function cargarLista() {
+    var pin = pinActual();
+    if (!pin) { setMsg('Ingresa el PIN de administrador primero.', 'err'); return; }
+    var wrap = document.getElementById('listaWrap');
+    wrap.innerHTML = 'Cargando...';
+    llamarApi('listarEmpleados', { pin: pin }).then(function (lista) {
+      if (!lista || lista.length === 0) {
+        wrap.innerHTML = '<p style="color:#64748b;">Todavía no hay colaboradores registrados.</p>';
+        return;
+      }
+      var html = '<table><tr><th>Nombre</th><th>Código</th><th>Estado</th><th></th></tr>';
+      lista.forEach(function (e) {
+        html += '<tr>' +
+          '<td>' + e.nombre + (e.tieneRostro ? '' : ' <span style="color:#b91c1c;font-size:11px;">(sin rostro)</span>') + '</td>' +
+          '<td>' + (e.codigo || '-') + '</td>' +
+          '<td><span class="pill ' + (e.activo ? 'pill-ok' : 'pill-off') + '">' + (e.activo ? 'Activo' : 'Inactivo') + '</span></td>' +
+          '<td><button class="' + (e.activo ? 'btn-danger' : 'btn-ok') + '" onclick="toggle(\'' + e.id + '\',' + (!e.activo) + ')">' +
+          (e.activo ? 'Desactivar' : 'Activar') + '</button></td>' +
+          '</tr>';
+      });
+      html += '</table>';
+      wrap.innerHTML = html;
+    }).catch(function (err) {
+      wrap.innerHTML = '<p style="color:#b91c1c;">Error: ' + err + '</p>';
+    });
+  }
+
+  function toggle(id, nuevoEstado) {
+    var pin = pinActual();
+    if (!pin) { setMsg('Ingresa el PIN de administrador primero.', 'err'); return; }
+    llamarApi('cambiarEstadoEmpleado', { id: id, activo: nuevoEstado, pin: pin })
+      .then(cargarLista)
+      .catch(function (err) { setMsg('Error: ' + err, 'err'); });
+  }
+
+  async function activarCamara() {
+    try {
+      setMsg('Activando cámara...', '');
+      await iniciarCamara();
+      document.getElementById('btnActivarCam').style.display = 'none';
+      setMsg('', '');
+    } catch (err) {
+      setMsg('Error activando la cámara: ' + err + '. Verifica los permisos del navegador.', 'err');
+    }
+  }
+
+  (async function init() {
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+      ]);
+      document.getElementById('btnActivarCam').style.display = 'inline-block';
+    } catch (err) {
+      setMsg('Error cargando modelos: ' + err, 'err');
+    }
+  })();
+</script>
+</body>
+</html>

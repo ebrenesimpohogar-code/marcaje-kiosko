@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Marcaje Facial</title>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%; background: #0f172a;
+      font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden;
+    }
+    #wrap { position: relative; width: 100vw; height: 100vh; }
+    #video {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    #overlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      transform: scaleX(-1);
+    }
+    #reloj {
+      position: absolute; top: 20px; right: 28px; color: #fff;
+      font-size: 22px; font-weight: 600; text-shadow: 0 1px 4px rgba(0,0,0,.6);
+      z-index: 5;
+    }
+    #titulo {
+      position: absolute; top: 20px; left: 28px; color: #fff;
+      font-size: 20px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.6);
+      z-index: 5;
+    }
+    #estado {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 26px 20px 34px; text-align: center; color: #fff;
+      background: linear-gradient(to top, rgba(0,0,0,.75), rgba(0,0,0,0));
+      z-index: 5; transition: background .25s ease;
+    }
+    #estado h1 { margin: 0 0 6px; font-size: 30px; }
+    #estado p { margin: 0; font-size: 16px; opacity: .9; }
+    .ok h1 { color: #4ade80; }
+    .warn h1 { color: #fbbf24; }
+    .idle h1 { color: #e2e8f0; font-size: 22px; font-weight: 400; }
+    #manualBtn {
+      position: absolute; bottom: 18px; right: 20px; z-index: 6;
+      background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.4);
+      padding: 8px 14px; border-radius: 20px; font-size: 13px; cursor: pointer;
+    }
+    #manualPanel {
+      display: none; position: absolute; inset: 0; z-index: 20;
+      background: rgba(15,23,42,.95); color: #fff; align-items: center; justify-content: center;
+      flex-direction: column; padding: 20px;
+    }
+    #manualPanel select, #manualPanel button {
+      font-size: 18px; padding: 10px 16px; margin: 8px; border-radius: 8px; border: none;
+    }
+    #loading {
+      position: absolute; inset: 0; background: #0f172a; color: #fff; z-index: 30;
+      display: flex; align-items: center; justify-content: center; flex-direction: column;
+      font-size: 18px; text-align: center; padding: 20px;
+    }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="overlay"></canvas>
+
+  <div id="titulo">🕒 Marcaje de Asistencia</div>
+  <div id="reloj">--:--:--</div>
+
+  <div id="estado" class="idle">
+    <h1 id="estadoTitulo">Iniciando cámara...</h1>
+    <p id="estadoTexto">Colócate frente a la cámara para marcar tu entrada o salida.</p>
+  </div>
+
+  <button id="manualBtn" onclick="abrirManual()">¿Problemas para reconocerte?</button>
+
+  <div id="manualPanel">
+    <h2>Marcaje manual</h2>
+    <p>Selecciona tu nombre para registrar tu marca.</p>
+    <select id="selectManual"></select><br>
+    <button onclick="marcarManual()" style="background:#22c55e;color:#fff;">Marcar</button>
+    <button onclick="cerrarManual()" style="background:#475569;color:#fff;">Cancelar</button>
+  </div>
+
+  <div id="loading">
+    <div id="loadingTexto">Cargando modelos de reconocimiento facial...<br>Esto puede tardar unos segundos.</div>
+    <button id="btnActivar" onclick="activarCamara()" style="display:none; margin-top:24px; padding:16px 28px; font-size:18px; font-weight:700; background:#2563eb; color:#fff; border:none; border-radius:10px; cursor:pointer;">
+      📷 Toca para activar la cámara
+    </button>
+  </div>
+</div>
+
+<script>
+  // ------------------------------------------------------------------
+  // URL de tu implementación de Apps Script (termina en /exec).
+  // ------------------------------------------------------------------
+  var APP_URL = 'https://script.google.com/macros/s/AKfycbwDcOYKcgzqY5U1uQpDbWJ92oZMt9PdMZjzDxyNuaMVR1DiB62eOb8-t-bAbFkykTgamA/exec';
+
+  // ------------------------------------------------------------------
+  // Cliente JSONP para hablar con Apps Script sin problemas de CORS.
+  // ------------------------------------------------------------------
+  var _jsonpContador = 0;
+  function llamarApi(accion, params) {
+    return new Promise(function (resolve, reject) {
+      var cbName = '_cb' + (_jsonpContador++) + '_' + Date.now();
+      var script = document.createElement('script');
+
+      var timeoutId = setTimeout(function () {
+        limpiar();
+        reject(new Error('Tiempo de espera agotado contactando el servidor.'));
+      }, 15000);
+
+      function limpiar() {
+        clearTimeout(timeoutId);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+
+      window[cbName] = function (resp) {
+        limpiar();
+        if (resp && resp.ok) resolve(resp.data);
+        else reject(new Error((resp && resp.error) || 'Error desconocido'));
+      };
+
+      var qs = 'action=' + encodeURIComponent(accion) + '&callback=' + cbName;
+      Object.keys(params || {}).forEach(function (k) {
+        qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+      });
+
+      script.src = APP_URL + '?' + qs;
+      script.onerror = function () {
+        limpiar();
+        reject(new Error('No se pudo contactar el servidor.'));
+      };
+      document.body.appendChild(script);
+    });
+  }
+
+  var MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+
+  var video = document.getElementById('video');
+  var overlay = document.getElementById('overlay');
+  var ctx = overlay.getContext('2d');
+
+  var empleados = [];        // [{id, nombre, codigo, descriptor}]
+  var faceMatcher = null;
+  var config = { distanciaMaxima: 0.5 };
+  var cooldowns = {};        // id -> timestamp hasta el cual no se debe re-marcar
+  var COOLDOWN_MS = 8000;
+  var procesando = false;
+
+  function actualizarReloj() {
+    var d = new Date();
+    document.getElementById('reloj').textContent =
+      d.toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  setInterval(actualizarReloj, 1000);
+  actualizarReloj();
+
+  function setEstado(clase, titulo, texto) {
+    var div = document.getElementById('estado');
+    div.className = clase;
+    document.getElementById('estadoTitulo').textContent = titulo;
+    document.getElementById('estadoTexto').textContent = texto;
+  }
+
+  function cargarDatos() {
+    return Promise.all([
+      llamarApi('obtenerEmpleadosActivos', {}).then(function (lista) {
+        empleados = lista || [];
+        if (empleados.length > 0) {
+          faceMatcher = new faceapi.FaceMatcher(
+            empleados.map(function (e) {
+              return new faceapi.LabeledFaceDescriptors(e.id, [Float32Array.from(e.descriptor)]);
+            }),
+            config.distanciaMaxima
+          );
+        }
+        var select = document.getElementById('selectManual');
+        select.innerHTML = '';
+        empleados.forEach(function (e) {
+          var opt = document.createElement('option');
+          opt.value = e.id; opt.textContent = e.nombre;
+          select.appendChild(opt);
+        });
+      }).catch(function (err) {
+        setEstado('warn', 'Error cargando colaboradores', String(err));
+      }),
+      llamarApi('obtenerConfigCliente', {}).then(function (cfg) {
+        config = cfg;
+      }).catch(function () { /* usa el valor por defecto */ })
+    ]);
+  }
+
+  function iniciarCamara() {
+    return navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false })
+      .then(function (stream) {
+        video.srcObject = stream;
+        return new Promise(function (resolve) {
+          video.onloadedmetadata = function () { resolve(); };
+        });
+      });
+  }
+
+  function loopDeteccion() {
+    var displaySize = { width: overlay.clientWidth, height: overlay.clientHeight };
+    faceapi.matchDimensions(overlay, displaySize);
+
+    setInterval(async function () {
+      if (procesando || !faceMatcher) return;
+
+      var deteccion = await faceapi
+        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+      if (!deteccion) {
+        setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar tu entrada o salida.');
+        return;
+      }
+
+      var resized = faceapi.resizeResults(deteccion, displaySize);
+      var box = resized.detection.box;
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+      var mejor = faceMatcher.findBestMatch(deteccion.descriptor);
+
+      if (mejor.label === 'unknown') {
+        setEstado('warn', 'No reconocido', 'No pudimos identificarte. Intenta de nuevo o usa el marcaje manual.');
+        return;
+      }
+
+      var ahora = Date.now();
+      if (cooldowns[mejor.label] && cooldowns[mejor.label] > ahora) {
+        return; // ya se marcó hace poco, evita duplicados mientras la persona sigue en cámara
+      }
+
+      var empleado = empleados.filter(function (e) { return e.id === mejor.label; })[0];
+      if (!empleado) return;
+
+      procesando = true;
+      cooldowns[mejor.label] = ahora + COOLDOWN_MS;
+      setEstado('idle', 'Verificando...', 'Un momento, ' + empleado.nombre + '...');
+
+      llamarApi('registrarMarca', { id: empleado.id })
+        .then(function (resp) { onResultadoMarca(resp); procesando = false; })
+        .catch(function (err) {
+          setEstado('warn', 'Error al registrar', String(err));
+          procesando = false;
+        });
+    }, 900);
+  }
+
+  function onResultadoMarca(resp) {
+    if (!resp || !resp.ok) {
+      setEstado('warn', 'Aviso', (resp && resp.mensaje) || 'No se pudo registrar la marca.');
+      return;
+    }
+    var esEntrada = resp.tipo === 'ENTRADA';
+    setEstado(
+      'ok',
+      (esEntrada ? '✅ Entrada registrada' : '👋 Salida registrada'),
+      resp.nombre + ' — ' + resp.hora
+    );
+    setTimeout(function () {
+      setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar tu entrada o salida.');
+    }, 5000);
+  }
+
+  function abrirManual() { document.getElementById('manualPanel').style.display = 'flex'; }
+  function cerrarManual() { document.getElementById('manualPanel').style.display = 'none'; }
+  function marcarManual() {
+    var id = document.getElementById('selectManual').value;
+    if (!id) return;
+    cerrarManual();
+    setEstado('idle', 'Verificando...', 'Un momento...');
+    llamarApi('registrarMarca', { id: id })
+      .then(onResultadoMarca)
+      .catch(function (err) { setEstado('warn', 'Error', String(err)); });
+  }
+
+  async function activarCamara() {
+    var btn = document.getElementById('btnActivar');
+    var texto = document.getElementById('loadingTexto');
+    btn.style.display = 'none';
+    texto.textContent = 'Activando cámara...';
+    try {
+      await iniciarCamara();
+
+      overlay.width = overlay.clientWidth;
+      overlay.height = overlay.clientHeight;
+
+      document.getElementById('loading').style.display = 'none';
+
+      if (empleados.length === 0) {
+        setEstado('warn', 'No hay colaboradores registrados', 'Pide a un administrador que registre rostros primero.');
+      } else {
+        setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar tu entrada o salida.');
+      }
+      loopDeteccion();
+    } catch (err) {
+      texto.innerHTML =
+        'Ocurrió un error iniciando la cámara:<br>' + err + '<br><br>' +
+        'Verifica los permisos de cámara del navegador.';
+      btn.textContent = '🔄 Reintentar';
+      btn.style.display = 'inline-block';
+    }
+  }
+
+  async function iniciar() {
+    var texto = document.getElementById('loadingTexto');
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+      ]);
+      await cargarDatos();
+
+      texto.textContent = 'Listo. Toca el botón para activar la cámara del kiosko.';
+      document.getElementById('btnActivar').style.display = 'inline-block';
+    } catch (err) {
+      texto.innerHTML =
+        'Ocurrió un error cargando los modelos:<br>' + err + '<br><br>' +
+        'Recarga la página para intentar de nuevo.';
+    }
+  }
+
+  iniciar();
+</script>
+</body>
+</html>
