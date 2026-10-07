@@ -30,6 +30,10 @@
       font-size: 20px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.6);
       z-index: 5;
     }
+    #gpsEstado {
+      position: absolute; top: 50px; right: 28px; color: #cbd5e1;
+      font-size: 12px; text-shadow: 0 1px 4px rgba(0,0,0,.6); z-index: 5;
+    }
     #estado {
       position: absolute; bottom: 0; left: 0; right: 0;
       padding: 26px 20px 34px; text-align: center; color: #fff;
@@ -65,17 +69,14 @@
 <div id="wrap">
   <video id="video" autoplay muted playsinline></video>
   <canvas id="overlay"></canvas>
-
   <div id="titulo">🕒 Marcaje de Asistencia</div>
   <div id="reloj">--:--:--</div>
-
+  <div id="gpsEstado"></div>
   <div id="estado" class="idle">
     <h1 id="estadoTitulo">Iniciando cámara...</h1>
-    <p id="estadoTexto">Colócate frente a la cámara para marcar tu entrada o salida.</p>
+    <p id="estadoTexto">Colócate frente a la cámara para marcar.</p>
   </div>
-
   <button id="manualBtn" onclick="abrirManual()">¿Problemas para reconocerte?</button>
-
   <div id="manualPanel">
     <h2>Marcaje manual</h2>
     <p>Selecciona tu nombre para registrar tu marca.</p>
@@ -83,7 +84,6 @@
     <button onclick="marcarManual()" style="background:#22c55e;color:#fff;">Marcar</button>
     <button onclick="cerrarManual()" style="background:#475569;color:#fff;">Cancelar</button>
   </div>
-
   <div id="loading">
     <div id="loadingTexto">Cargando modelos de reconocimiento facial...<br>Esto puede tardar unos segundos.</div>
     <button id="btnActivar" onclick="activarCamara()" style="display:none; margin-top:24px; padding:16px 28px; font-size:18px; font-weight:700; background:#2563eb; color:#fff; border:none; border-radius:10px; cursor:pointer;">
@@ -91,7 +91,6 @@
     </button>
   </div>
 </div>
-
 <script>
   // ------------------------------------------------------------------
   // URL de tu implementación de Apps Script (termina en /exec).
@@ -106,29 +105,24 @@
     return new Promise(function (resolve, reject) {
       var cbName = '_cb' + (_jsonpContador++) + '_' + Date.now();
       var script = document.createElement('script');
-
       var timeoutId = setTimeout(function () {
         limpiar();
         reject(new Error('Tiempo de espera agotado contactando el servidor.'));
       }, 15000);
-
       function limpiar() {
         clearTimeout(timeoutId);
         delete window[cbName];
         if (script.parentNode) script.parentNode.removeChild(script);
       }
-
       window[cbName] = function (resp) {
         limpiar();
         if (resp && resp.ok) resolve(resp.data);
         else reject(new Error((resp && resp.error) || 'Error desconocido'));
       };
-
       var qs = 'action=' + encodeURIComponent(accion) + '&callback=' + cbName;
       Object.keys(params || {}).forEach(function (k) {
         qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
       });
-
       script.src = APP_URL + '?' + qs;
       script.onerror = function () {
         limpiar();
@@ -139,17 +133,53 @@
   }
 
   var MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
-
   var video = document.getElementById('video');
   var overlay = document.getElementById('overlay');
   var ctx = overlay.getContext('2d');
-
   var empleados = [];        // [{id, nombre, codigo, descriptor}]
   var faceMatcher = null;
   var config = { distanciaMaxima: 0.5 };
   var cooldowns = {};        // id -> timestamp hasta el cual no se debe re-marcar
   var COOLDOWN_MS = 8000;
   var procesando = false;
+
+  // ------------------------------------------------------------------
+  // Ubicación GPS: se pide una vez (junto con la cámara) y se deja
+  // escuchando en segundo plano con watchPosition, así cada marca usa
+  // la última posición conocida sin tener que esperar unos segundos a
+  // que el GPS responda en el momento. Si el navegador no da el permiso
+  // (o el kiosko no tiene GPS), simplemente no se manda — la marca se
+  // registra igual, solo que sin ubicación.
+  // ------------------------------------------------------------------
+  var ultimaPosicion = null;
+  var watchIdGps = null;
+
+  function iniciarUbicacion() {
+    if (!navigator.geolocation) {
+      document.getElementById('gpsEstado').textContent = '';
+      return;
+    }
+    watchIdGps = navigator.geolocation.watchPosition(
+      function (pos) {
+        ultimaPosicion = pos.coords;
+        document.getElementById('gpsEstado').textContent = '📍 Ubicación activa';
+      },
+      function () {
+        ultimaPosicion = null;
+        document.getElementById('gpsEstado').textContent = '📍 Sin ubicación (se marca igual)';
+      },
+      { enableHighAccuracy: true, maximumAge: 60000, timeout: 20000 }
+    );
+  }
+
+  function paramsConUbicacion(extra) {
+    var params = Object.assign({}, extra);
+    if (ultimaPosicion) {
+      params.lat = ultimaPosicion.latitude;
+      params.lng = ultimaPosicion.longitude;
+    }
+    return params;
+  }
 
   function actualizarReloj() {
     var d = new Date();
@@ -219,7 +249,7 @@
       ctx.clearRect(0, 0, overlay.width, overlay.height);
 
       if (!deteccion) {
-        setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar tu entrada o salida.');
+        setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar.');
         return;
       }
 
@@ -230,7 +260,6 @@
       ctx.strokeRect(box.x, box.y, box.width, box.height);
 
       var mejor = faceMatcher.findBestMatch(deteccion.descriptor);
-
       if (mejor.label === 'unknown') {
         setEstado('warn', 'No reconocido', 'No pudimos identificarte. Intenta de nuevo o usa el marcaje manual.');
         return;
@@ -248,7 +277,7 @@
       cooldowns[mejor.label] = ahora + COOLDOWN_MS;
       setEstado('idle', 'Verificando...', 'Un momento, ' + empleado.nombre + '...');
 
-      llamarApi('registrarMarca', { id: empleado.id })
+      llamarApi('registrarMarca', paramsConUbicacion({ id: empleado.id }))
         .then(function (resp) { onResultadoMarca(resp); procesando = false; })
         .catch(function (err) {
           setEstado('warn', 'Error al registrar', String(err));
@@ -257,30 +286,37 @@
     }, 900);
   }
 
+  // Texto e ícono que se muestra según cuál de las 4 marcas del día tocó
+  // (ver CICLO_MARCAS_LV / CICLO_MARCAS_SAB en MARCAJE_Code.gs — el
+  // servidor decide cuál es, acá solo se muestra el resultado).
+  var ETIQUETAS_MARCA = {
+    ENTRADA: { icono: '✅', texto: 'Entrada registrada' },
+    SALIDA_ALMUERZO: { icono: '🍽️', texto: 'Salida a almuerzo registrada' },
+    ENTRADA_ALMUERZO: { icono: '🍽️', texto: 'Regreso de almuerzo registrado' },
+    SALIDA: { icono: '👋', texto: 'Salida registrada' }
+  };
+
   function onResultadoMarca(resp) {
     if (!resp || !resp.ok) {
       setEstado('warn', 'Aviso', (resp && resp.mensaje) || 'No se pudo registrar la marca.');
       return;
     }
-    var esEntrada = resp.tipo === 'ENTRADA';
-    setEstado(
-      'ok',
-      (esEntrada ? '✅ Entrada registrada' : '👋 Salida registrada'),
-      resp.nombre + ' — ' + resp.hora
-    );
+    var etiqueta = ETIQUETAS_MARCA[resp.tipo] || { icono: 'ℹ️', texto: 'Marca registrada' };
+    setEstado('ok', etiqueta.icono + ' ' + etiqueta.texto, resp.nombre + ' — ' + resp.hora);
     setTimeout(function () {
-      setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar tu entrada o salida.');
+      setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar.');
     }, 5000);
   }
 
   function abrirManual() { document.getElementById('manualPanel').style.display = 'flex'; }
   function cerrarManual() { document.getElementById('manualPanel').style.display = 'none'; }
+
   function marcarManual() {
     var id = document.getElementById('selectManual').value;
     if (!id) return;
     cerrarManual();
     setEstado('idle', 'Verificando...', 'Un momento...');
-    llamarApi('registrarMarca', { id: id })
+    llamarApi('registrarMarca', paramsConUbicacion({ id: id }))
       .then(onResultadoMarca)
       .catch(function (err) { setEstado('warn', 'Error', String(err)); });
   }
@@ -292,16 +328,14 @@
     texto.textContent = 'Activando cámara...';
     try {
       await iniciarCamara();
-
+      iniciarUbicacion();
       overlay.width = overlay.clientWidth;
       overlay.height = overlay.clientHeight;
-
       document.getElementById('loading').style.display = 'none';
-
       if (empleados.length === 0) {
         setEstado('warn', 'No hay colaboradores registrados', 'Pide a un administrador que registre rostros primero.');
       } else {
-        setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar tu entrada o salida.');
+        setEstado('idle', 'Esperando...', 'Colócate frente a la cámara para marcar.');
       }
       loopDeteccion();
     } catch (err) {
@@ -322,7 +356,6 @@
         faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
       ]);
       await cargarDatos();
-
       texto.textContent = 'Listo. Toca el botón para activar la cámara del kiosko.';
       document.getElementById('btnActivar').style.display = 'inline-block';
     } catch (err) {
